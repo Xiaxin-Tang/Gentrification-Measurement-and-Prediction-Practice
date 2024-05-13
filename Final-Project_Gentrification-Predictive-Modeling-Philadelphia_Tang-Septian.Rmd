@@ -1,0 +1,682 @@
+---
+title: "Gentrification Predictive Modeling in Philadelphia"
+author: "Regy Septian and Xiaxin Tang"
+date: "2024-05-13"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: "hide"
+    code_download: true
+---
+
+## 1 Introduction
+
+Gentrification, a complex and multifaceted phenomenon, significantly impacts urban landscapes and communities. Recent studies and reports from Philadelphia serve as a poignant example of these transformations. The displacement of lower-income, predominantly black and Latino residents due to rising housing costs highlights the critical socioeconomic shifts occurring within gentrifying neighborhoods [^1]. This displacement is often juxtaposed with the economic benefits perceived through extensive urban development and increased safety.
+
+Interactive analyses, visually demonstrate the expansion of gentrification across Philadelphia, showing stark increases in housing prices and changing socioeconomic statuses [^2]. Moreover, the construction boom of 2019 set records, particularly in neighborhoods around Center City, further indicating areas undergoing significant gentrification [^3]. This development brings into question the balance between growth and the preservation of community identity and accessibility.
+
+This project aims to develop a predictive model for gentrification, using Philadelphia as a case study to identify at-risk areas, thereby enabling proactive urban planning and policy-making. Through a combination of spatial and non-spatial data analysis, this study will explore how gentrification can be measured and predicted, offering insights that could inform decisions to mitigate its adverse effects.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org/"))
+
+install.packages("riem")
+install.packages("tidyverse")
+installed.packages("sf")
+installed.packages("lubridate")
+install.packages("tidycensus")
+install.packages("mapview")
+install.packages("caret")
+library(caret)
+library(mapview)
+library(tidycensus)
+library(tidyverse)
+library(sf)
+library(lubridate)
+library(tigris)
+library(tidycensus)
+library(viridis)
+library(riem)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(RSocrata)
+
+tidycensus::census_api_key("7c984127f786a51716ed4f5115e1b08c3d2033f1", overwrite = TRUE)
+
+```
+
+## 2 Data set up and Model Selection
+
+To develop a predictive model for gentrification, we have structured our approach around analyzing non-spatial socio-demographic data and spatial infrastructure changes. For the non-spatial data, we focused on socio-economic measurements such as income, race, education, employment, and age, observing changes over five years from 2014 to 2019. These help us identify shifts in neighborhood demographics indicative of gentrification. Complementing this, we incorporated spatial data detailing transportation, parks, and other urban infrastructure changes within the same interval. The interplay between these data types is crucial for understanding historical trends and predicting future gentrification scenarios in Philadelphia. This section sets the stage for detailed discussions on data sources, the rationale behind our model selection, and the methodologies employed. gentrification by looking at the related factors.
+
+### 2.1 Definition and Measurement of Gentrification
+
+Gentrification is defined as the influx of residents with a higher socioeconomic status (SES) into neighborhoods that are predominantly lower-SES. This definition is operationalized by tracking substantial increases in variables such as income, home values, rent, educational attainment, and professional employment from 2014 to 2019. The chosen variables align with recognized indicators in gentrification studies, such as those discussed in the Sydney and Drexel studies, where changes in demographic and economic characteristics are pivotal in identifying gentrifying areas.
+
+The justification for this measurement approach rests on its ability to capture key shifts indicative of gentrification, such as increases in income and education levels, which are widely used in literature to delineate gentrifying neighborhoods. By calculating the percentage changes in these variables across a five-year interval and presenting them as a gentrification score by census tract, the method follows a robust, empirical strategy akin to the models used in the references. This approach allows for the nuanced capture of gentrification effects on a neighborhood level, providing a reliable basis for analysis and future policy interventions.
+
+This methodology benefits from incorporating both spatial (geographic changes, infrastructural developments) and non-spatial data (socio-economic and demographic shifts), reflecting the comprehensive model used in the Sydney study. Furthermore, the use of a longitudinal dataset, as recommended by the Drexel study, enhances the understanding of gentrification dynamics over time, making it possible to identify trends and predict future changes more accurately.
+
+### 2.2 Socio-Demographic Data (Non-spatial)
+
+The non-spatial data collection involves using American Community Survey (ACS) 5-year estimates from 2014 and 2019. We chose the 5-year time frame to minimize potential bias from spatial changes and ensure that census tract boundaries remain consistent, allowing for reliable socio-demographic analysis over time.
+The R code begins by loading the relevant ACS variables using the `load_variables` function, which are then retrieved for 2014 and 2019 using the `get_acs` function. The data is focused on key socio-demographic variables such as total population, median income, median age, race demographics, educational attainment, median rent, and public transportation usage. These variables are crucial for identifying shifts that might indicate gentrification.
+We then perform transformations on this data, calculating each variable's percentage change over the five years. This aims to identify significant shifts in demographic and economic indicators that signal gentrification, such as increases in median income or changes in educational attainment levels.
+The data is then prepared for analysis by renaming and selecting the relevant variables, ensuring they are in the correct format for spatial operations, which are performed using the `st_transform` function to standardize the coordinate reference system.
+
+```{r get_census, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+acs_variable_list.2009 <- load_variables(2009, #year
+                                         "acs5", #five year ACS estimates
+                                         cache = TRUE)
+
+PHLCensus_2019 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2019, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t2 =  B01003_001E,
+         Med_Inc_t2 = B19013_001E,
+         Med_Age_t2 = B01002_001E,
+         Black_Pop_t2 = B02001_002E,
+         Education_attainment_t2 = B23006_023E,
+         Median_rent_t2 = B08301_001E,
+         Total_Public_Trans_t2 = B08301_010E) %>%
+  select(Total_Pop_t2, Med_Inc_t2, Black_Pop_t2, Education_attainment_t2, 
+         Total_Public_Trans_t2, Med_Age_t2, Median_rent_t2, GEOID) %>%
+  mutate(Percent_black_t2 = Black_Pop_t2 / Total_Pop_t2) %>% 
+  st_transform(crs = "EPSG:4326") %>% 
+  st_drop_geometry()
+
+PHLCensus_2014 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2014, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t1 =  B01003_001E,
+         Med_Inc_t1 = B19013_001E,
+         Med_Age_t1 = B01002_001E,
+         Black_Pop_t1 = B02001_002E,
+         Education_attainment_t1 = B23006_023E,
+         Median_rent_t1 = B08301_001E,
+         Total_Public_Trans_t1 = B08301_010E) %>%
+  select(Total_Pop_t1, Med_Inc_t1, Black_Pop_t1, Education_attainment_t1,
+         Total_Public_Trans_t1, Med_Age_t1, Median_rent_t1, 
+         GEOID, geometry) %>%
+  mutate(Percent_black_t1 = Black_Pop_t1 / Total_Pop_t1) %>% 
+  st_transform(crs = "EPSG:4326")
+
+PHLCensus <- PHLCensus_2019 %>% 
+  left_join(., PHLCensus_2014)
+
+```
+
+Finally, we calculate a *gentrification score* based on these changes. This score is a composite measure that aggregates the shifts across several indicators to quantify the level of gentrification. We categorize each tract based on this score into categories such as 'ungentrified', 'slightly gentrified', 'gentrified', and 'highly gentrified', allowing for a nuanced analysis of the gentrification levels across different neighborhoods. The histogram shows that fewer tracts on both the negative and higher positive ends indicate that significantly degentrified or highly gentrified areas are less common. The spread towards the positive side also suggests some tracts experienced moderate to high gentrification. This visualization helps identify the general trend of gentrification across the area studied. This process helps understand the extent of gentrification and make informed decisions about urban planning and policy-making in response to these demographic changes.
+
+```{r cars}
+PHLCensus <- PHLCensus %>% 
+  mutate(change_pop = (Total_Pop_t2 - Total_Pop_t1)/Total_Pop_t1,
+         change_black_pop = (Black_Pop_t2 - Black_Pop_t1)/Black_Pop_t1,
+         change_high_income = (Med_Inc_t2 - Med_Inc_t1)/Med_Inc_t1,
+         change_high_edu = (Education_attainment_t2 - Education_attainment_t1)/Education_attainment_t1,
+         change_public_tran = (Total_Public_Trans_t2 - Total_Public_Trans_t1)/mean(Total_Public_Trans_t1),
+         change_age = (Med_Age_t2 - Med_Age_t1)/Med_Age_t1,
+         change_rent = (Median_rent_t2 - Median_rent_t1)/Median_rent_t1,
+         change_perc_black = (Percent_black_t2 - Percent_black_t1)/Percent_black_t1 * -1,
+         gent_score = change_perc_black + change_rent - change_age +
+           change_high_edu + change_high_income) %>% 
+  mutate(cate_gent = ifelse(gent_score < 0, "degentrified",         
+                    ifelse(gent_score > 0 & gent_score < 0.61, "slightly gentrified",
+                    ifelse(gent_score > 0.61 & gent_score < 1.345, "gentrified", "highly gentrified"))))
+
+
+PHLCensus <- PHLCensus %>% 
+  mutate(change_pop = (Total_Pop_t2 - Total_Pop_t1)/Total_Pop_t1,
+         change_black_pop = (Black_Pop_t2 - Black_Pop_t1)/Black_Pop_t1,
+         change_high_income = (Med_Inc_t2 - Med_Inc_t1)/Med_Inc_t1,
+         change_high_edu = (Education_attainment_t2 - Education_attainment_t1)/Education_attainment_t1,
+         change_public_tran = (Total_Public_Trans_t2 - Total_Public_Trans_t1)/mean(Total_Public_Trans_t1),
+         change_age = (Med_Age_t2 - Med_Age_t1)/Med_Age_t1,
+         change_rent = (Median_rent_t2 - Median_rent_t1)/Median_rent_t1,
+         change_perc_black = (Percent_black_t2 - Percent_black_t1)/Percent_black_t1 * -1,
+         gent_score = change_rent + change_high_income) %>% 
+  mutate(cate_gent = ifelse(gent_score < 0, "degentrified",         
+                    ifelse(gent_score > 0 & gent_score < 0.61, "slightly gentrified",
+                    ifelse(gent_score > 0.61 & gent_score < 1.345, "gentrified", "highly gentrified"))))
+
+# quartiles <- quantile(PHLCensus$gent_score, probs = c(0.25, 0.5, 0.75))
+# quartiles
+
+PHLCensus$Black_Pop_t2[PHLCensus$Black_Pop_t2 == 0] <- 2
+
+PHLCensus$Black_Pop_t1[PHLCensus$Black_Pop_t1 == 0] <- 1
+
+PHLCensus$gent_score[is.infinite(PHLCensus$gent_score)] <- 0
+
+PHLCensus$gent_score[is.infinite(PHLCensus$gent_score)] <- 0
+
+PHLCensus$gent_score[is.na(PHLCensus$gent_score)] <- 0
+
+PHLCensus <- st_as_sf(PHLCensus, crs = 4326)
+
+ggplot(data = PHLCensus, aes(x = gent_score)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+```
+
+### 2.3 Spatial Data
+
+For the spatial data analysis in our gentrification study, we utilized six different types of data sourced from various databases, ensuring a comprehensive spatial understanding of the areas studied. Here is an overview of the spatial data types and their sources:
+1. **Schools**: Data on locations and attributes of schools were sourced from OpenDataPhilly and the Pennsylvania Spatial Data Access (PASDA).
+2. **Parks**: Information on parks was also obtained from OpenDataPhilly and PASDA, providing insights into green space distribution.
+3. **Food Access**: This data includes locations of food vendors and accessibility scores, gathered from OpenDataPhilly and archived sources.
+4. **Bus Ridership**: Ridership statistics and bus stop data were sourced from the Southeastern Pennsylvania Transportation Authority (SEPTA) Open Data.
+5. **Permits**: Building and construction permits, which are indicators of development and investment in an area, were extracted from OpenDataPhilly.
+6. **Crime**: Crime data, which includes types and locations of reported incidents, was sourced from OpenDataPhilly, offering insights into neighborhood safety and desirability.
+
+These datasets are crucial for analyzing how infrastructure and services affect neighborhood dynamics and contribute to gentrification.
+
+#### 2.3.1 School
+
+For the spatial analysis of schools, we used data from 2014 and 2019 to track changes in educational infrastructure within Philadelphia's census tracts. Initially, we verified the Coordinate Reference System (CRS) to ensure that the school data's spatial reference matched the census data for accurate spatial analysis. School data for both years was then read from their respective sources and transformed to align with the census data's CRS. Subsequently, this data was spatially joined to the census tracts to count the schools per tract. We aggregated this information by GEOID, summarizing the number of schools in each tract for both years, and finally integrated these counts back into the main census dataset. This approach helps to highlight shifts in school infrastructure, which can be an indicator of gentrification.
+
+```{r schools, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+# Check the CRS of PHLCensus
+PHLCensus_crs <- st_crs(PHLCensus)
+
+school_2019 <- st_read("Schools.geojson") %>% 
+  select("OBJECTID")
+
+school_2019 <- st_transform(school_2019, crs = PHLCensus_crs)
+
+school_count_2019 <- PHLCensus %>% 
+  st_join(., school_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(school_count_2019 = n()) %>% 
+  st_drop_geometry()
+
+school_2014 <- st_read("PhiladelphiaSchool_Facilities2016/PhiladelphiaSchool_Facilities2016.shp") %>% 
+  select("OBJECTID")
+
+school_2014 <- st_transform(school_2014, crs = PHLCensus_crs)
+
+school_count_2014 <- PHLCensus %>% 
+  st_join(., school_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(school_count_2014 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., school_count_2014) %>% 
+  left_join(., school_count_2019) 
+
+```
+
+#### 2.3.2 Parks
+
+For the analysis of parks, we utilized spatial data from two different years: 2016, which is the closest available year prior to 2019 since data from 2014 was not accessible, and the 2019 dataset. We began by reading the 2019 park data from a GeoJSON file, focusing on the public names of the parks, and then transforming these coordinates to match the EPSG:4326 CRS. Similarly, the 2016 park data was processed, including selection and transformation to the same CRS. For both datasets, centroids of the park locations were calculated to facilitate spatial joins with the PHLCensus tracts. These spatial joins allowed us to count the number of parks within each census tract for both years. The resulting counts were then merged into the primary PHLCensus dataset to analyze changes in park accessibility across the tracts over time, providing insights into how changes in green spaces might correlate with gentrification trends.
+
+```{r parks, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+Parks_2019 <- st_read("PPR_Properties.geojson") %>% 
+  select(PUBLIC_NAME) %>% 
+  st_transform(crs = "EPSG:4326")
+
+# Calculate centroids
+centroids_2019 <- st_centroid(Parks_2019)
+
+
+Parks_2016 <- st_read("PhillyFPC_PPR_parks_point.shp") %>% 
+  select("NAME")  %>% 
+  st_transform(crs = "EPSG:4326")
+
+# mapview(PHLCensus)
+# mapview(Parks_2019)
+
+PHLCensus_park_2016 <- PHLCensus %>%
+  st_join(., Parks_2016) %>%
+  group_by(GEOID) %>%
+  mutate(total_parks_t1 = n(),
+         total_parks_t1 = case_when(
+           is.na(NAME) ~ 0,
+           TRUE ~ total_parks_t1
+         )) %>% 
+  distinct(GEOID, total_parks_t1)
+
+
+
+PHLCensus_park_2019 <- PHLCensus %>%
+  st_join(., centroids_2019) %>%
+  group_by(GEOID) %>%
+  mutate(total_parks_t2 = n(),
+         total_parks_t2 = case_when(
+           is.na(PUBLIC_NAME) ~ 0,
+           TRUE ~ total_parks_t2
+         )) %>% 
+  distinct(GEOID, total_parks_t2)
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., PHLCensus_park_2016) %>% 
+  left_join(., PHLCensus_park_2019)
+
+```
+
+#### 2.3.3 Permits
+
+For the analysis of permits, we focused on permit data by census tract for the years 2014 and 2019. The process involved reading shapefiles containing permit data for these years and filtering the data to include only those permits issued in the respective years. We then joined this data spatially with the PHLCensus tracts, grouping by GEOID to calculate the total number of permits issued per tract each year. This step was repeated for both datasets (2014 and 2019), allowing us to observe any changes in development activity across the census tracts, which can indicate gentrification or economic development. The results were then merged back into the primary PHLCensus dataset to facilitate further analysis.
+
+```{r permits, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+Permits2 <- st_read("permits_2016-present/permits.shp") %>% 
+  filter(grepl("^2019", permitissu)) %>% 
+  select("objectid")
+
+permits_per_tract2 <- PHLCensus %>% 
+  st_join(., Permits2) %>% 
+  group_by(GEOID) %>% 
+  summarise(num_permits_t2 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., permits_per_tract2)
+
+Permits1 <- st_read("permits_2007-2015/permits.shp") %>% 
+  filter(grepl("^2014", permitissu)) %>% 
+  select("objectid")
+
+permits_per_tract1 <- PHLCensus %>% 
+  st_join(., Permits1) %>% 
+  group_by(GEOID) %>% 
+  summarise(num_permits_t1 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., permits_per_tract1)
+
+```
+#### 2.3.4 Food Access
+
+In Philadelphia, the food access landscape between 2014 and 2019 shows distinct changes that are crucial in understanding neighborhood dynamics related to gentrification. Improved access to healthy food can signal gentrification as newer, wealthier demographics move in, leading to shifts in local markets and food retailers to cater to these new residents. Analyzing changes in food access helps us assess whether areas are becoming more gentrified and possibly identify the socio-economic shifts accompanying this transformation.
+In our analysis, we processed GeoJSON files for 2014 and 2019 to quantify food access. Each file was read and transformed to categorize levels of access into numerical values, representing no, low, moderate, and high access. We computed the centroids of these spatial points to facilitate joining with the census tract data (PHLCensus). By aggregating the transformed food access data by census tract, we computed the mean access levels for both years, ensuring continuity in our spatial analysis despite potential missing values by replacing them with the mean access level. This method allows us to track changes in food access over time, aligning with shifts in demographic and economic indicators within the census tracts.
+
+```{r food access, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+food_2019 <- st_read("Food_access/NeighborhoodFoodRetail.geojson") %>% 
+  mutate(HPSS_ACCESS_t2 = ifelse(HPSS_ACCESS == "No Access", 0, 
+  ifelse(HPSS_ACCESS == "Low Access", 1, 2))) %>% 
+  select("HPSS_ACCESS_t2")
+
+# Calculate mean of column A (ignoring NAs)
+mean_A <- mean(food_2019$HPSS_ACCESS_t2, na.rm = TRUE)
+
+# Replace NA values in column A with the mean
+food_2019$HPSS_ACCESS_t2[is.na(food_2019$HPSS_ACCESS_t2)] <- mean_A
+
+food_2019 <- st_centroid(food_2019)
+
+Access_census_2019 <- PHLCensus %>% 
+  st_join(., food_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(Access_t2 = mean(HPSS_ACCESS_t2)) %>% 
+  st_drop_geometry()
+  
+
+food_2014 <- st_read("Food_access/Walkable_Access_Healthy_Food.geojson") %>% 
+  mutate(HPSS_ACCESS_t1 = ifelse(ACCESS_ == "No Access", 0,         
+  ifelse(ACCESS_ == "Low Access", 1,
+  ifelse(ACCESS_ == "Moderate Access", 2, 3)))) %>% 
+  select("HPSS_ACCESS_t1")
+
+food_2014 <- st_make_valid(food_2014)
+
+# mapview(food_2014)
+
+food_2014 <- st_centroid(food_2014)
+# Calculate mean of column A (ignoring NAs)
+mean_B <- mean(food_2019$HPSS_ACCESS_t2, na.rm = TRUE)
+
+# Replace NA values in column A with the mean
+food_2014$HPSS_ACCESS_t1[is.na(food_2014$HPSS_ACCESS_t1)] <- mean_B
+
+Access_census_2014 <- PHLCensus %>% 
+  st_join(., food_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(Access_t1 = mean(HPSS_ACCESS_t1)) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., Access_census_2014) %>% 
+  left_join(., Access_census_2019) 
+
+```
+
+#### 2.3.5 Bus Stops
+
+For the analysis of bus ridership, we utilized data from SEPTA for the years 2014 and 2019, specifically capturing bus stop usage during the fall seasons of each year. The process began by reading the bus ridership data, filtering it to include only the fall season entries, and then grouping it by census tract ID to sum up the entries and exits at each stop, which indicates the total ridership. This aggregated data was then joined to the PHLCensus dataset using the census tract ID as a key, enabling us to observe changes in public transportation usage within each tract. This data helps understand the mobility patterns of residents and can be a significant indicator of changes in demographic and economic conditions related to gentrification.
+
+```{r bus stop, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+bus_2014 <- read_csv("Bus_Ridership_by_Census_Tract_2014.csv") %>% 
+  filter(Season == "Fall 2014") %>% 
+  group_by(Census_Tract_ID) %>% 
+  summarise(Total_On_t1 = sum(On_)) %>% 
+  select("Total_On_t1", "Census_Tract_ID")%>% 
+  rename(GEOID = Census_Tract_ID) 
+
+bus_2014$GEOID <- as.character(bus_2014$GEOID)
+
+bus_2019 <- read_csv("Bus_Ridership_by_Census_Tract_2019.csv") %>% 
+  filter(Season == "Fall 2019") %>% 
+  group_by(Census_Tract_ID) %>% 
+  summarise(Total_On_t2 = sum(On_)) %>% 
+  select("Total_On_t2", "Census_Tract_ID") %>% 
+  rename(GEOID = Census_Tract_ID)
+bus_2019$GEOID <- as.character(bus_2019$GEOID)
+
+PHLCensus_Bus_2014 <- PHLCensus %>% 
+  left_join(., bus_2014, by = c("GEOID"))
+
+PHLCensus <- PHLCensus_Bus_2014 %>% 
+  left_join(., bus_2019, by = c("GEOID"))
+
+```
+
+#### 2.3.5 Crime
+
+To analyze crime data, we utilized incident reports from 2014 and 2019. The process involved:
+- Reading spatial data for crime incidents from these years,
+- Selecting relevant attributes, and
+- Transforming them to match the Coordinate Reference System (CRS) of the PHLCensus data.
+
+We then performed a spatial join of the crime data with the PHLCensus tracts, grouping by GEOID to calculate the total number of crimes reported in each tract for both years. This method allowed us to observe changes in crime rates across the census tracts, providing insights into the safety and livability of neighborhoods, which are crucial factors in gentrification studies.
+
+```{r crime, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+crime_2014 <- st_read("crime2014/incidents_part1_part2.shp") %>% 
+  select("objectid")
+
+crime_2014 <- st_transform(crime_2014, crs = PHLCensus_crs)
+
+crime_2019 <- st_read("crime2019/incidents_part1_part2.shp") %>% 
+  select("objectid")
+
+crime_2019 <- st_transform(crime_2019, crs = PHLCensus_crs)
+
+crime_count_2014 <- PHLCensus %>% 
+  st_join(., crime_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(crime_count_2014 = n()) %>% 
+  st_drop_geometry()
+
+crime_count_2019 <- PHLCensus %>% 
+  st_join(., crime_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(crime_count_2019 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., crime_count_2014) %>% 
+  left_join(., crime_count_2019) 
+
+```
+
+## 3 Exploratory Data Analysis
+
+### 3.1 Model Selection
+
+In selecting the appropriate model for predicting gentrification, we considered several options including linear regression, Poisson regression, and logistic regression. We ultimately chose simple linear regression for our predictive modeling. This decision was guided by the nature of our dependent variable—gentrification score—which is a continuous measure. Linear regression is particularly well-suited for modeling situations where the outcome variable is expected to exist along a continuum, making it ideal for predicting the degree of gentrification based on various predictors. This method allows for straightforward interpretation and understanding of how each factor influences the gentrification score.
+
+## 4 Modeling
+
+### 4.1 Model Development
+
+In refining our predictive model for gentrification, we meticulously integrated both spatial and non-spatial data spanning from 2014 to 2019, focusing on key urban development indicators such as parks, bus ridership, permits, and crime rates. This comprehensive approach involved calculating changes in these indicators and addressing any missing data by imputing mean values, which ensured robustness and data integrity. We employed linear regression to correlate these changes with gentrification scores, rigorously evaluating the model's fit and the significance of each predictor. The statistical analysis highlighted the particularly significant impacts of permits and median age on neighborhood changes. This model achieved an R-squared value of 0.1409, suggesting it explains 14.09% of the variability in gentrification scores. This detailed modeling process ensures the model's applicability to various urban settings, avoiding overfitting, and providing urban planners with a critical tool to understand and predict gentrification trends effectively.
+
+```{r model development, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+PHLCensus <- PHLCensus %>% 
+  mutate(park_change = (total_parks_t2 - total_parks_t1)/total_parks_t1,
+         bus_change = (Total_On_t2 - Total_On_t1)/Total_On_t1,
+         permits_change = (num_permits_t2 - num_permits_t1)/num_permits_t1,
+         food_change = (Access_t2 - Access_t1)/Access_t1,
+         school_change = (school_count_2019 - school_count_2014)/school_count_2014,
+         crime_change = (crime_count_2019 - crime_count_2014)/crime_count_2014)
+
+PHLCensus <- PHLCensus[complete.cases(PHLCensus$gent_score), ]
+
+PHLCensus <- transform(PHLCensus, 
+                       permits_change = ifelse(is.na(permits_change), mean(permits_change, na.rm = TRUE), permits_change),
+                       food_change = ifelse(is.na(food_change), mean(food_change, na.rm = TRUE), food_change),
+                       school_change = ifelse(is.na(school_change), mean(school_change, na.rm = TRUE), school_change),
+                       crime_change = ifelse(is.na(crime_change), mean(crime_change, na.rm = TRUE), crime_change),
+                       change_high_income = ifelse(is.na(change_high_income), mean(change_high_income, na.rm = TRUE), change_high_income))
+
+#PHLCensus <- PHLCensus %>% 
+#  filter(cate_gent == "gentrified" | cate_gent == "highly gentrified")
+# Fit the linear regression model
+
+
+model.2 <- lm(gent_score ~ num_permits_t2 +  total_parks_t2 + school_count_2019 +
+              crime_count_2019 +  Med_Age_t2, data = PHLCensus)
+
+#summary(model)
+summary(model.2)
+
+ggplot(data = PHLCensus, aes(x = gent_score)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = permits_change)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = bus_change)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = change_age)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+```
+
+### 4.2 Model Testing and Validation
+
+In testing and validating our model for gentrification, we used cross-validation and other methodologies to assess its accuracy and reliability across different urban settings. We employed a k-fold cross-validation technique, where the data was split into multiple subsets to ensure the model’s performance is consistent across different samples. This rigorous testing process highlighted the model’s tendency to slightly underestimate gentrification scores, with a mean error close to zero, suggesting that predictions are generally accurate yet conservative. The mean absolute error indicated that deviations from actual scores are modest, reinforcing the model's applicability in practical scenarios. These results confirm the model's capability to capture central tendencies in gentrification scoring while maintaining reasonable accuracy, making it a reliable tool for urban planners.
+
+```{r gent 2022, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+PHLCensus_2022 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2022, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t1 =  B01003_001E,
+         Med_Inc_t1 = B19013_001E,
+         Med_Age_t1 = B01002_001E,
+         Black_Pop_t1 = B02001_002E,
+         Education_attainment_t1 = B23006_023E,
+         Median_rent_t1 = B08301_001E,
+         Total_Public_Trans_t1 = B08301_010E) %>%
+  select(Total_Pop_t1, Med_Inc_t1, Black_Pop_t1, Education_attainment_t1,
+         Total_Public_Trans_t1, Med_Age_t1, Median_rent_t1, 
+         GEOID, geometry) %>%
+  mutate(Percent_black_t1 = Black_Pop_t1 / Total_Pop_t1) %>% 
+  st_transform(crs = "EPSG:4326") %>% 
+  select(Med_Inc_2022 = Med_Inc_t1, Med_rent_2022 = Median_rent_t1)
+
+centroids_2022 <- st_centroid(PHLCensus_2022)
+
+PHLCensus_2022_combined <- PHLCensus %>% 
+  st_join(., centroids_2022) %>% 
+  group_by(GEOID) %>% 
+  summarise(Med_Inc_2022 = mean(Med_Inc_2022), Med_rent_2022 = mean(Med_rent_2022)) %>% 
+  st_drop_geometry()
+
+mean_inc <- mean(PHLCensus_2022_combined$Med_Inc_2022, na.rm = TRUE)
+
+mean_rent <- mean(PHLCensus_2022_combined$Med_rent_2022, na.rm = TRUE)
+
+# Replace NA values with the mean
+PHLCensus_2022_combined$Med_Inc_2022 <- ifelse(is.na(PHLCensus_2022_combined$Med_Inc_2022), mean_inc, PHLCensus_2022_combined$Med_Inc_2022)
+
+PHLCensus_2022_combined$Med_rent_2022 <- ifelse(is.na(PHLCensus_2022_combined$Med_rent_2022), mean_rent, PHLCensus_2022_combined$Med_rent_2022)
+
+mean_rent <- mean(PHLCensus_2022_combined$Med_rent_2022[PHLCensus_2022_combined$Med_rent_2022 != 0])
+
+# Replace 0 values with the mean
+PHLCensus_2022_combined$Med_rent_2022 <- ifelse(PHLCensus_2022_combined$Med_rent_2022 == 0, mean_rent, PHLCensus_2022_combined$Med_rent_2022)
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., PHLCensus_2022_combined)
+
+PHLCensus <- PHLCensus %>% 
+  mutate(gent_score_2022 = (Med_rent_2022 - Median_rent_t2)/Med_rent_2022 + (Med_Inc_2022 - Med_Inc_t2)/Med_Inc_2022)
+
+PHLCensus$gent_score_2022[is.na(PHLCensus$gent_score_2022)] <- 0
+
+```
+
+```{r test validation, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+inTrain <- createDataPartition(
+              y = paste(PHLCensus$gent_score), 
+              p = .60, list = FALSE)
+PHLCensus.training <- PHLCensus[inTrain,] 
+PHLCensus.test <- PHLCensus[-inTrain,]   
+
+reg.training <- lm(gent_score ~ ., data = st_drop_geometry(PHLCensus.training) %>% 
+                                    dplyr::select(gent_score, num_permits_t2, total_parks_t2, 
+                                               school_count_2019, crime_count_2019, Med_Age_t2))
+
+PHLCensus.test <-
+  PHLCensus.test %>%
+  mutate(gent_score.Predict = predict(reg.training, PHLCensus.test),
+         gent_score.Error = gent_score.Predict - gent_score,
+         gent_score.AbsError = abs(gent_score.Predict - gent_score),
+         gent_score.APE = (abs(gent_score.Predict - gent_score)) / gent_score.Predict)
+
+# Define the number of folds for cross-validation
+k <- 10
+
+# Create indices for k-fold cross-validation
+folds <- createFolds(PHLCensus$gent_score, k = k, list = TRUE)
+
+# Initialize vectors to store performance metrics for each fold
+APEs <- numeric(k)
+
+# Perform k-fold cross-validation
+for (i in 1:k) {
+  # Extract training and testing indices for this fold
+  train_indices <- unlist(folds[-i])
+  test_indices <- unlist(folds[i])
+  
+  # Split data into training and testing sets
+  PHLCensus.training <- PHLCensus[train_indices, ]
+  PHLCensus.test <- PHLCensus[test_indices, ]
+  
+  # Fit the model
+  reg.training <- lm(gent_score ~ ., data = st_drop_geometry(PHLCensus.training) %>%
+                                         dplyr::select(gent_score, num_permits_t2, total_parks_t2,
+                                                       school_count_2019, crime_count_2019, Med_Age_t2))
+  
+  # Make predictions on the testing set
+  predictions <- predict(reg.training, PHLCensus.test)
+  
+  # Calculate performance metrics for this fold
+  errors <- predictions - PHLCensus$gent_score[test_indices]
+  abs_errors <- abs(errors)
+  APE <- abs_errors / predictions
+  
+  # Store the performance metrics for this fold
+  APEs[i] <- mean(APE, na.rm = TRUE)
+}
+
+PHLCensus.test <- PHLCensus.test %>%
+  mutate(gent_score.Predict = predict(reg.training, newdata = PHLCensus.test),
+         gent_score.Error = gent_score.Predict - gent_score,
+         gent_score.AbsError = abs(gent_score.Predict - gent_score),
+         gent_score.APE = ifelse(gent_score.Predict != 0, abs(gent_score.Predict - gent_score) / gent_score.Predict, 0))
+
+
+# Average Absolute Percentage Error (APE) across all folds
+mean_APE <- mean(APEs, na.rm = TRUE)
+
+mean_predict <- mean(PHLCensus.test$gent_score.Predict)
+mean_predict
+mean_error <- mean(PHLCensus.test$gent_score.Error)
+mean_error
+mean_abs_error <- mean(PHLCensus.test$gent_score.AbsError)
+mean_abs_error
+mean_APE <- mean(PHLCensus.test$gent_score.APE)
+mean_APE
+
+min_gent<- min(PHLCensus.test$gent_score)
+min_gent
+max_gent<- max(PHLCensus.test$gent_score)
+max_gent
+standard_deviation <- sd(PHLCensus.test$gent_score)
+
+```
+
+### 4.3 Validation
+
+To further validate our gentrification model, we extended our analysis by incorporating 2022 data as a new dataset. This step allowed us to test the model's predictions against more recent trends and observe any deviations. The 2022 data included variables like median income and rent, adjusted for inflation and demographic shifts. We calculated changes in these variables from our last model point in 2019, allowing us to generate a 2022 gentrification score. This approach provided a direct comparison between the model's predictions and actual data points from 2022, enhancing our understanding of the model's accuracy and reliability. The process involved merging the new data with existing datasets, ensuring continuity and the ability to track changes over an extended period. This validation process helps in assessing the model’s performance and its applicability to current urban settings.
+
+```{r validation2, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+PHLCensus.test <- PHLCensus.test %>% 
+  mutate(gent_score_differen = gent_score_2022 - gent_score.Predict)
+
+PHLCensus.test <- PHLCensus.test %>%
+  mutate(error.2022 = gent_score.Predict - gent_score_2022,
+         absError.2022 = abs(gent_score.Predict - gent_score_2022),
+         aPE.2022 = ifelse(gent_score.Predict != 0, abs(gent_score.Predict - gent_score_2022) / gent_score.Predict, 0))
+
+mean_abs_error <- mean(PHLCensus.test$absError.2022)
+mean_abs_error
+```
+
+## 5 Results
+
+The model's results demonstrate that certain predictors such as median income, park accessibility, and permit issuance have significant impacts on gentrification scores. The model explains approximately 14.09% of the variance in gentrification, indicating moderate effectiveness in capturing the complex phenomena of urban change.
+The generalizability of this model to other cities or contexts depends on the similarity of urban dynamics and data availability. Cities with comprehensive data on similar predictors could potentially apply this model to predict gentrification trends.
+
+## 6 Conclusion
+
+### 6.1 Findings Summary
+
+The model highlights the role of economic and infrastructural changes in driving gentrification. It suggests a measurable impact of development activities on neighborhood transformations. However, the model's moderate explanatory power points to the complexity of gentrification and the influence of unmodeled factors.
+The model's limitations include its moderate variance explanation and the potential for overfitting specific city dynamics. Future improvements could involve integrating more contextual variables like policy changes or economic shifts and applying machine learning techniques to enhance predictive accuracy.
+
+### 6.2 Recommendations
+
+Urban planners could use this model to identify potential areas at risk of gentrification and implement policies aimed at mitigating displacement or managing the pace of development. Incorporating the model into urban planning software tools could also provide ongoing monitoring capabilities.
+Future research could focus on integrating more complex machine learning models to handle non-linear relationships and interactions between variables. Additionally, exploring gentrification in a broader array of cities would help refine the model's predictive power and generalizability, ensuring it accommodates diverse urban contexts.
+
+## 7 GitHub Repository Link
+
+A link to the GitHub repository containing all code used in the project for full reproducibility.
+
+## 8 References
+
+[^1]: [The Philadelphia Inquirer, 2019](https://www.inquirer.com/opinion/commentary/philadelphia-gentrification-displacement-federal-reserve-study-20190920.html)
+[^2]: [Eika Fenandez, 2019](https://storymaps.arcgis.com/stories/1bc8aa420f344e5493bad3f24634995e)
+[^3]: [WHYY, 2019](https://whyy.org/articles/philly-set-a-new-record-for-construction-in-2019-thanks-to-these-gentrifying-neighborhoods/)
+[^4]: [Economy League, 2019](https://www.economyleague.org/resources/stop-and-frisk-philadelphias-changing-neighborhoods)

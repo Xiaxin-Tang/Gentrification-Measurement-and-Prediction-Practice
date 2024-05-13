@@ -1,0 +1,715 @@
+---
+title: "Measuring_gentrification"
+author: "Regy Septian and Xiaxin Tang"
+date: "2024-05-01"
+output: html_document
+---
+gentrification measure:
+Dependent Variable: gentrification score:
+1. change of percentage of high income B19013_001E
+2. change of ethnic composition B02001_003
+3. change of high education group B23006_001
+4. change of percentage of professional employment B23025_001
+5. change of percentage of housing above median rent 	
+B25031_001
+6. change of income statues
+7. change of median age B01002_001E
+
+Independent Variables:
+1. Change of Public transportation
+2. 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::knit("yourfile.Rmd", "README.md")
+
+install.packages("riem")
+install.packages("tidyverse")
+installed.packages("sf")
+installed.packages("lubridate")
+install.packages("tidycensus")
+library(tidycensus)
+library(tidyverse)
+library(sf)
+library(lubridate)
+library(tigris)
+library(tidycensus)
+library(viridis)
+library(riem)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(RSocrata)
+
+tidycensus::census_api_key("7c984127f786a51716ed4f5115e1b08c3d2033f1", overwrite = TRUE)
+
+```
+
+```{r get_census, message=FALSE, warning=FALSE, cache=TRUE, results = 'hide'}
+
+install.packages("sf")
+library(sf)
+acs_variable_list.2009 <- load_variables(2009, #year
+                                         "acs5", #five year ACS estimates
+                                         cache = TRUE)
+
+PHLCensus_2019 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2019, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t2 =  B01003_001E,
+         Med_Inc_t2 = B19013_001E,
+         Med_Age_t2 = B01002_001E,
+         Black_Pop_t2 = B02001_002E,
+         Education_attainment_t2 = B23006_023E,
+         Median_rent_t2 = B08301_001E,
+         Total_Public_Trans_t2 = B08301_010E) %>%
+  select(Total_Pop_t2, Med_Inc_t2, Black_Pop_t2, Education_attainment_t2, 
+         Total_Public_Trans_t2, Med_Age_t2, Median_rent_t2, GEOID) %>%
+  mutate(Percent_black_t2 = Black_Pop_t2 / Total_Pop_t2) %>% 
+  st_transform(crs = "EPSG:4326") %>% 
+  st_drop_geometry()
+
+PHLCensus_2014 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2014, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t1 =  B01003_001E,
+         Med_Inc_t1 = B19013_001E,
+         Med_Age_t1 = B01002_001E,
+         Black_Pop_t1 = B02001_002E,
+         Education_attainment_t1 = B23006_023E,
+         Median_rent_t1 = B08301_001E,
+         Total_Public_Trans_t1 = B08301_010E) %>%
+  select(Total_Pop_t1, Med_Inc_t1, Black_Pop_t1, Education_attainment_t1,
+         Total_Public_Trans_t1, Med_Age_t1, Median_rent_t1, 
+         GEOID, geometry) %>%
+  mutate(Percent_black_t1 = Black_Pop_t1 / Total_Pop_t1) %>% 
+  st_transform(crs = "EPSG:4326")
+
+PHLCensus <- PHLCensus_2019 %>% 
+  left_join(., PHLCensus_2014)
+
+
+```
+
+
+
+```{r cars}
+PHLCensus <- PHLCensus %>% 
+  mutate(change_pop = (Total_Pop_t2 - Total_Pop_t1)/Total_Pop_t1,
+         change_black_pop = (Black_Pop_t2 - Black_Pop_t1)/Black_Pop_t1,
+         change_high_income = (Med_Inc_t2 - Med_Inc_t1)/Med_Inc_t1,
+         change_high_edu = (Education_attainment_t2 - Education_attainment_t1)/Education_attainment_t1,
+         change_public_tran = (Total_Public_Trans_t2 - Total_Public_Trans_t1)/mean(Total_Public_Trans_t1),
+         change_age = (Med_Age_t2 - Med_Age_t1)/Med_Age_t1,
+         change_rent = (Median_rent_t2 - Median_rent_t1)/Median_rent_t1,
+         change_perc_black = (Percent_black_t2 - Percent_black_t1)/Percent_black_t1 * -1,
+         gent_score = change_perc_black + change_rent - change_age +
+           change_high_edu + change_high_income) %>% 
+  mutate(cate_gent = ifelse(gent_score < 0, "degentrified",         
+                    ifelse(gent_score > 0 & gent_score < 0.61, "slightly gentrified",
+                    ifelse(gent_score > 0.61 & gent_score < 1.345, "gentrified", "highly gentrified"))))
+
+
+PHLCensus <- PHLCensus %>% 
+  mutate(change_pop = (Total_Pop_t2 - Total_Pop_t1)/Total_Pop_t1,
+         change_black_pop = (Black_Pop_t2 - Black_Pop_t1)/Black_Pop_t1,
+         change_high_income = (Med_Inc_t2 - Med_Inc_t1)/Med_Inc_t1,
+         change_high_edu = (Education_attainment_t2 - Education_attainment_t1)/Education_attainment_t1,
+         change_public_tran = (Total_Public_Trans_t2 - Total_Public_Trans_t1)/mean(Total_Public_Trans_t1),
+         change_age = (Med_Age_t2 - Med_Age_t1)/Med_Age_t1,
+         change_rent = (Median_rent_t2 - Median_rent_t1)/Median_rent_t1,
+         change_perc_black = (Percent_black_t2 - Percent_black_t1)/Percent_black_t1 * -1,
+         gent_score = change_rent + change_high_income) %>% 
+  mutate(cate_gent = ifelse(gent_score < 0, "degentrified",         
+                    ifelse(gent_score > 0 & gent_score < 0.61, "slightly gentrified",
+                    ifelse(gent_score > 0.61 & gent_score < 1.345, "gentrified", "highly gentrified"))))
+
+quartiles <- quantile(PHLCensus$gent_score, probs = c(0.25, 0.5, 0.75))
+quartiles
+
+PHLCensus$Black_Pop_t2[PHLCensus$Black_Pop_t2 == 0] <- 2
+
+PHLCensus$Black_Pop_t1[PHLCensus$Black_Pop_t1 == 0] <- 1
+
+PHLCensus$gent_score[is.infinite(PHLCensus$gent_score)] <- 0
+
+PHLCensus$gent_score[is.infinite(PHLCensus$gent_score)] <- 0
+
+PHLCensus$gent_score[is.na(PHLCensus$gent_score)] <- 0
+
+PHLCensus <- st_as_sf(PHLCensus, crs = 4326)
+
+ggplot(data = PHLCensus, aes(x = gent_score)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+```
+
+starbucks
+
+```{r pressure, echo=FALSE}
+client_id <- "LSPOrHyPacbVd849pRbb1g"
+client_secret <- "ZpADWbRLoojujfErgtWaDABar_VTmcfI-lJy2aMPF_zg2-fofNiCLdHfJCgxK3754sgp0AodzkT6Qigbh_ka-a20S1MlByduFwjwYlp1AxbMkrzFTVbr-c_qhKk6ZnYx"
+install.packages("httr")
+library(httr)
+
+res <- POST("https://api.yelp.com/oauth2/token",
+            body = list(grant_type = "client_credentials",
+                        client_id = client_id,
+                        client_secret = client_secret))
+
+token <- content(res)$access_token
+
+yelp <- "https://api.yelp.com"
+location <- "Philadelphia, PA"
+term <- "starbucks"
+limit <- 60
+categories <- NULL
+radius <- 11000
+url <- modify_url(yelp, path = c("v3", "businesses", "search"),
+                  query = list(term = term,
+                              location = location, 
+                               radius = radius,
+                              limit = limit))
+res <- GET(url, add_headers('Authorization' = paste("bearer", client_secret)))
+
+results <- content(res)
+
+yelp_httr_parse <- function(x) {
+
+  parse_list <- list(id = x$id, 
+                     name = x$name, 
+                     rating = x$rating, 
+                     review_count = x$review_count, 
+                     latitude = x$coordinates$latitude, 
+                     longitude = x$coordinates$longitude, 
+                     address1 = x$location$address1, 
+                     city = x$location$city, 
+                     state = x$location$state, 
+                     distance = x$distance)
+  
+  parse_list <- lapply(parse_list, FUN = function(x) ifelse(is.null(x), "", x))
+  
+  df <- data_frame(id=parse_list$id,
+                   name=parse_list$name, 
+                   rating = parse_list$rating, 
+                   review_count = parse_list$review_count, 
+                   latitude=parse_list$latitude, 
+                   longitude = parse_list$longitude, 
+                   address1 = parse_list$address1, 
+                   city = parse_list$city, 
+                   state = parse_list$state, 
+                   distance= parse_list$distance)
+  df
+}
+
+results_list <- lapply(results$businesses, FUN = yelp_httr_parse)
+
+business_data <- do.call("rbind", results_list)
+
+starbucks_address <- st_as_sf(business_data, coords = c("longitude", "latitude"), crs = 4326) %>% 
+  select("address1")
+
+PHLCensus_summary <- PHLCensus %>% 
+  st_join(., starbucks_address) 
+
+PHLCensus_summary$address1[is.na(PHLCensus_summary$address)] <- 0
+
+
+PHLCensus_summary$address1 <- ifelse(PHLCensus_summary$address1 != 0, 1, PHLCensus_summary$address1)
+
+PHLCensus_summary <- PHLCensus_summary %>% 
+  group_by(GEOID) %>% 
+  summarise(star_count = sum(as.numeric(address1))) %>% 
+  st_drop_geometry()
+
+mapview(PHLCensus_summary)
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., PHLCensus_summary)
+```
+
+Parks
+
+```{r pressure, echo=FALSE}
+install.packages("mapview")
+library(mapview)
+Parks_2019 <- st_read("PPR_Properties.geojson") %>% 
+  select(PUBLIC_NAME) %>% 
+  st_transform(crs = "EPSG:4326")
+
+# Calculate centroids
+centroids_2019 <- st_centroid(Parks_2019)
+
+
+Parks_2016 <- st_read("PhillyFPC_PPR_parks_point.shp") %>% 
+  select("NAME")  %>% 
+  st_transform(crs = "EPSG:4326")
+
+mapview(PHLCensus)
+mapview(Parks_2019)
+
+PHLCensus_park_2016 <- PHLCensus %>%
+  st_join(., Parks_2016) %>%
+  group_by(GEOID) %>%
+  mutate(total_parks_t1 = n(),
+         total_parks_t1 = case_when(
+           is.na(NAME) ~ 0,
+           TRUE ~ total_parks_t1
+         )) %>% 
+  distinct(GEOID, total_parks_t1)
+
+
+
+PHLCensus_park_2019 <- PHLCensus %>%
+  st_join(., centroids_2019) %>%
+  group_by(GEOID) %>%
+  mutate(total_parks_t2 = n(),
+         total_parks_t2 = case_when(
+           is.na(PUBLIC_NAME) ~ 0,
+           TRUE ~ total_parks_t2
+         )) %>% 
+  distinct(GEOID, total_parks_t2)
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., PHLCensus_park_2016) %>% 
+  left_join(., PHLCensus_park_2019)
+
+
+
+```
+Buses
+
+```{r pressure, echo=FALSE}
+
+bus_2014 <- read_csv("Bus_Ridership_by_Census_Tract_2014.csv") %>% 
+  filter(Season == "Fall 2014") %>% 
+  group_by(Census_Tract_ID) %>% 
+  summarise(Total_On_t1 = sum(On_)) %>% 
+  select("Total_On_t1", "Census_Tract_ID")%>% 
+  rename(GEOID = Census_Tract_ID) 
+
+bus_2014$GEOID <- as.character(bus_2014$GEOID)
+
+bus_2019 <- read_csv("Bus_Ridership_by_Census_Tract_2019.csv") %>% 
+  filter(Season == "Fall 2019") %>% 
+  group_by(Census_Tract_ID) %>% 
+  summarise(Total_On_t2 = sum(On_)) %>% 
+  select("Total_On_t2", "Census_Tract_ID") %>% 
+  rename(GEOID = Census_Tract_ID)
+bus_2019$GEOID <- as.character(bus_2019$GEOID)
+
+PHLCensus_Bus_2014 <- PHLCensus %>% 
+  left_join(., bus_2014, by = c("GEOID"))
+
+PHLCensus <- PHLCensus_Bus_2014 %>% 
+  left_join(., bus_2019, by = c("GEOID"))
+
+
+
+```
+
+
+Permits
+
+```{r pressure, echo=FALSE}
+Permits2 <- st_read("permits_2016-present/permits.shp") %>% 
+  filter(grepl("^2019", permitissu)) %>% 
+  select("objectid")
+
+permits_per_tract2 <- PHLCensus %>% 
+  st_join(., Permits2) %>% 
+  group_by(GEOID) %>% 
+  summarise(num_permits_t2 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., permits_per_tract2)
+
+Permits1 <- st_read("permits_2007-2015/permits.shp") %>% 
+  filter(grepl("^2014", permitissu)) %>% 
+  select("objectid")
+
+permits_per_tract1 <- PHLCensus %>% 
+  st_join(., Permits1) %>% 
+  group_by(GEOID) %>% 
+  summarise(num_permits_t1 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., permits_per_tract1)
+
+
+
+```
+Food Access
+
+```{r pressure, echo=FALSE}
+food_2019 <- st_read("Food_access/NeighborhoodFoodRetail.geojson") %>% 
+  mutate(HPSS_ACCESS_t2 = ifelse(HPSS_ACCESS == "No Access", 0, 
+  ifelse(HPSS_ACCESS == "Low Access", 1, 2))) %>% 
+  select("HPSS_ACCESS_t2")
+
+# Calculate mean of column A (ignoring NAs)
+mean_A <- mean(food_2019$HPSS_ACCESS_t2, na.rm = TRUE)
+
+# Replace NA values in column A with the mean
+food_2019$HPSS_ACCESS_t2[is.na(food_2019$HPSS_ACCESS_t2)] <- mean_A
+
+food_2019 <- st_centroid(food_2019)
+
+Access_census_2019 <- PHLCensus %>% 
+  st_join(., food_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(Access_t2 = mean(HPSS_ACCESS_t2)) %>% 
+  st_drop_geometry()
+  
+
+food_2014 <- st_read("Food_access/Walkable_Access_Healthy_Food.geojson") %>% 
+  mutate(HPSS_ACCESS_t1 = ifelse(ACCESS_ == "No Access", 0,         
+  ifelse(ACCESS_ == "Low Access", 1,
+  ifelse(ACCESS_ == "Moderate Access", 2, 3)))) %>% 
+  select("HPSS_ACCESS_t1")
+
+food_2014 <- st_make_valid(food_2014)
+
+mapview(food_2014)
+
+food_2014 <- st_centroid(food_2014)
+# Calculate mean of column A (ignoring NAs)
+mean_B <- mean(food_2019$HPSS_ACCESS_t2, na.rm = TRUE)
+
+# Replace NA values in column A with the mean
+food_2014$HPSS_ACCESS_t1[is.na(food_2014$HPSS_ACCESS_t1)] <- mean_B
+
+
+Access_census_2014 <- PHLCensus %>% 
+  st_join(., food_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(Access_t1 = mean(HPSS_ACCESS_t1)) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., Access_census_2014) %>% 
+  left_join(., Access_census_2019) 
+
+
+```
+
+School
+
+```{r pressure, echo=FALSE}
+# Check the CRS of PHLCensus
+PHLCensus_crs <- st_crs(PHLCensus)
+
+school_2019 <- st_read("Schools.geojson") %>% 
+  select("OBJECTID")
+
+school_2019 <- st_transform(school_2019, crs = PHLCensus_crs)
+
+school_count_2019 <- PHLCensus %>% 
+  st_join(., school_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(school_count_2019 = n()) %>% 
+  st_drop_geometry()
+
+school_2014 <- st_read("PhiladelphiaSchool_Facilities2016/PhiladelphiaSchool_Facilities2016.shp") %>% 
+  select("OBJECTID")
+
+school_2014 <- st_transform(school_2014, crs = PHLCensus_crs)
+
+school_count_2014 <- PHLCensus %>% 
+  st_join(., school_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(school_count_2014 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., school_count_2014) %>% 
+  left_join(., school_count_2019) 
+
+```
+
+crime
+```{r pressure, echo=FALSE}
+
+crime_2014 <- st_read("crime2014/incidents_part1_part2.shp") %>% 
+  select("objectid")
+
+crime_2014 <- st_transform(crime_2014, crs = PHLCensus_crs)
+
+crime_2019 <- st_read("crime2019/incidents_part1_part2.shp") %>% 
+  select("objectid")
+
+crime_2019 <- st_transform(crime_2019, crs = PHLCensus_crs)
+
+
+
+crime_count_2014 <- PHLCensus %>% 
+  st_join(., crime_2014) %>% 
+  group_by(GEOID) %>% 
+  summarise(crime_count_2014 = n()) %>% 
+  st_drop_geometry()
+
+crime_count_2019 <- PHLCensus %>% 
+  st_join(., crime_2019) %>% 
+  group_by(GEOID) %>% 
+  summarise(crime_count_2019 = n()) %>% 
+  st_drop_geometry()
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., crime_count_2014) %>% 
+  left_join(., crime_count_2019) 
+
+```
+
+
+indego
+
+```{r pressure, echo=FALSE}
+
+indego_2016 <- read_csv("indego_2016/Indego_Trips_2016Q1.csv")
+%>% 
+  select("objectid")
+
+
+indego_2019 <- read_csv("indego_2019/indego-trips-2019-q4.csv")
+%>% 
+  select("objectid")
+
+
+```
+
+2022 data
+```{r pressure, echo=FALSE}
+PHLCensus_2022 <- 
+  get_acs(geography = "tract", 
+          variables = c("B01003_001E", "B19013_001E", 
+                        "B01002_001E", "B02001_002E",
+                        "B23006_023E", "B08301_001E", "B08301_010E"),
+          year = 2022, 
+          state = "PA", 
+          county = "Philadelphia",
+          geometry = TRUE, 
+          output = "wide") %>%
+  rename(Total_Pop_t1 =  B01003_001E,
+         Med_Inc_t1 = B19013_001E,
+         Med_Age_t1 = B01002_001E,
+         Black_Pop_t1 = B02001_002E,
+         Education_attainment_t1 = B23006_023E,
+         Median_rent_t1 = B08301_001E,
+         Total_Public_Trans_t1 = B08301_010E) %>%
+  select(Total_Pop_t1, Med_Inc_t1, Black_Pop_t1, Education_attainment_t1,
+         Total_Public_Trans_t1, Med_Age_t1, Median_rent_t1, 
+         GEOID, geometry) %>%
+  mutate(Percent_black_t1 = Black_Pop_t1 / Total_Pop_t1) %>% 
+  st_transform(crs = "EPSG:4326") %>% 
+  select(Med_Inc_2022 = Med_Inc_t1, Med_rent_2022 = Median_rent_t1)
+
+centroids_2022 <- st_centroid(PHLCensus_2022)
+
+PHLCensus_2022_combined <- PHLCensus %>% 
+  st_join(., centroids_2022) %>% 
+  group_by(GEOID) %>% 
+  summarise(Med_Inc_2022 = mean(Med_Inc_2022), Med_rent_2022 = mean(Med_rent_2022)) %>% 
+  st_drop_geometry()
+
+mean_inc <- mean(PHLCensus_2022_combined$Med_Inc_2022, na.rm = TRUE)
+
+mean_rent <- mean(PHLCensus_2022_combined$Med_rent_2022, na.rm = TRUE)
+
+# Replace NA values with the mean
+PHLCensus_2022_combined$Med_Inc_2022 <- ifelse(is.na(PHLCensus_2022_combined$Med_Inc_2022), mean_inc, PHLCensus_2022_combined$Med_Inc_2022)
+
+PHLCensus_2022_combined$Med_rent_2022 <- ifelse(is.na(PHLCensus_2022_combined$Med_rent_2022), mean_rent, PHLCensus_2022_combined$Med_rent_2022)
+
+mean_rent <- mean(PHLCensus_2022_combined$Med_rent_2022[PHLCensus_2022_combined$Med_rent_2022 != 0])
+
+# Replace 0 values with the mean
+PHLCensus_2022_combined$Med_rent_2022 <- ifelse(PHLCensus_2022_combined$Med_rent_2022 == 0, mean_rent, PHLCensus_2022_combined$Med_rent_2022)
+
+PHLCensus <- PHLCensus %>% 
+  left_join(., PHLCensus_2022_combined)
+
+PHLCensus <- PHLCensus %>% 
+  mutate(gent_score_2022 = (Med_rent_2022 - Median_rent_t2)/Med_rent_2022 + (Med_Inc_2022 - Med_Inc_t2)/Med_Inc_2022)
+
+PHLCensus$gent_score_2022[is.na(PHLCensus$gent_score_2022)] <- 0
+
+
+```
+
+simple regression
+
+```{r pressure, echo=FALSE}
+
+PHLCensus <- PHLCensus %>% 
+  mutate(park_change = (total_parks_t2 - total_parks_t1)/total_parks_t1,
+         bus_change = (Total_On_t2 - Total_On_t1)/Total_On_t1,
+         permits_change = (num_permits_t2 - num_permits_t1)/num_permits_t1,
+         food_change = (Access_t2 - Access_t1)/Access_t1,
+         school_change = (school_count_2019 - school_count_2014)/school_count_2014,
+         crime_change = (crime_count_2019 - crime_count_2014)/crime_count_2014)
+
+PHLCensus <- PHLCensus[complete.cases(PHLCensus$gent_score), ]
+
+PHLCensus <- transform(PHLCensus, 
+                       permits_change = ifelse(is.na(permits_change), mean(permits_change, na.rm = TRUE), permits_change),
+                       food_change = ifelse(is.na(food_change), mean(food_change, na.rm = TRUE), food_change),
+                       school_change = ifelse(is.na(school_change), mean(school_change, na.rm = TRUE), school_change),
+                       crime_change = ifelse(is.na(crime_change), mean(crime_change, na.rm = TRUE), crime_change),
+                       change_high_income = ifelse(is.na(change_high_income), mean(change_high_income, na.rm = TRUE), change_high_income))
+
+#PHLCensus <- PHLCensus %>% 
+#  filter(cate_gent == "gentrified" | cate_gent == "highly gentrified")
+# Fit the linear regression model
+
+
+
+model.2 <- lm(gent_score ~ num_permits_t2 +  total_parks_t2 + school_count_2019 +
+              crime_count_2019 +  Med_Age_t2, data = PHLCensus)
+
+summary(model)
+summary(model.2)
+
+ggplot(data = PHLCensus, aes(x = gent_score)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = permits_change)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = bus_change)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+ggplot(data = PHLCensus, aes(x = change_age)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Random Data", x = "Value", y = "Frequency")
+
+```
+
+Cross Validation
+```{r pressure, echo=FALSE}
+install.packages("caret")
+library(caret)
+
+inTrain <- createDataPartition(
+              y = paste(PHLCensus$gent_score), 
+              p = .60, list = FALSE)
+PHLCensus.training <- PHLCensus[inTrain,] 
+PHLCensus.test <- PHLCensus[-inTrain,]   
+
+reg.training <- lm(gent_score ~ ., data = st_drop_geometry(PHLCensus.training) %>% 
+                                    dplyr::select(gent_score, num_permits_t2, total_parks_t2, 
+                                               school_count_2019, crime_count_2019, Med_Age_t2))
+
+PHLCensus.test <-
+  PHLCensus.test %>%
+  mutate(gent_score.Predict = predict(reg.training, PHLCensus.test),
+         gent_score.Error = gent_score.Predict - gent_score,
+         gent_score.AbsError = abs(gent_score.Predict - gent_score),
+         gent_score.APE = (abs(gent_score.Predict - gent_score)) / gent_score.Predict)
+
+# Define the number of folds for cross-validation
+k <- 10
+
+# Create indices for k-fold cross-validation
+folds <- createFolds(PHLCensus$gent_score, k = k, list = TRUE)
+
+# Initialize vectors to store performance metrics for each fold
+APEs <- numeric(k)
+
+# Perform k-fold cross-validation
+for (i in 1:k) {
+  # Extract training and testing indices for this fold
+  train_indices <- unlist(folds[-i])
+  test_indices <- unlist(folds[i])
+  
+  # Split data into training and testing sets
+  PHLCensus.training <- PHLCensus[train_indices, ]
+  PHLCensus.test <- PHLCensus[test_indices, ]
+  
+  # Fit the model
+  reg.training <- lm(gent_score ~ ., data = st_drop_geometry(PHLCensus.training) %>%
+                                         dplyr::select(gent_score, num_permits_t2, total_parks_t2,
+                                                       school_count_2019, crime_count_2019, Med_Age_t2))
+  
+  # Make predictions on the testing set
+  predictions <- predict(reg.training, PHLCensus.test)
+  
+  # Calculate performance metrics for this fold
+  errors <- predictions - PHLCensus$gent_score[test_indices]
+  abs_errors <- abs(errors)
+  APE <- abs_errors / predictions
+  
+  # Store the performance metrics for this fold
+  APEs[i] <- mean(APE, na.rm = TRUE)
+}
+
+PHLCensus.test <- PHLCensus.test %>%
+  mutate(gent_score.Predict = predict(reg.training, newdata = PHLCensus.test),
+         gent_score.Error = gent_score.Predict - gent_score,
+         gent_score.AbsError = abs(gent_score.Predict - gent_score),
+         gent_score.APE = ifelse(gent_score.Predict != 0, abs(gent_score.Predict - gent_score) / gent_score.Predict, 0))
+
+
+# Average Absolute Percentage Error (APE) across all folds
+mean_APE <- mean(APEs, na.rm = TRUE)
+
+mean_predict <- mean(PHLCensus.test$gent_score.Predict)
+mean_predict
+mean_error <- mean(PHLCensus.test$gent_score.Error)
+mean_error
+mean_abs_error <- mean(PHLCensus.test$gent_score.AbsError)
+mean_abs_error
+mean_APE <- mean(PHLCensus.test$gent_score.APE)
+mean_APE
+
+min_gent<- min(PHLCensus.test$gent_score)
+min_gent
+max_gent<- max(PHLCensus.test$gent_score)
+max_gent
+standard_deviation <- sd(PHLCensus.test$gent_score)
+
+```
+Mean Predict: The average predicted gent_score value is approximately 0.3561844. Considering that the standard deviation of gent_score is 0.4111175, the mean predicted value falls within one standard deviation of the gent_score distribution. This suggests that, on average, the model's predictions are aligned with the central tendency of the gent_score values.
+
+Mean Error: The mean error is approximately -0.01409836. Although slightly negative, indicating a tendency to underestimate, this error is relatively small compared to the standard deviation of gent_score. It suggests that, on average, the model's predictions are close to the actual gent_score values, with deviations within one standard deviation.
+
+Mean Absolute Error: The mean absolute error is approximately 0.3200383. This value indicates the average absolute deviation of the model's predictions from the actual gent_score values. Considering the standard deviation of gent_score is 0.4111175, the mean absolute error is relatively small, suggesting that, on average, the model's predictions deviate from the actual values by less than one standard deviation.
+
+Mean Absolute Percentage Error (MAPE): The mean absolute percentage error is approximately 1.051485%. Given the standard deviation of gent_score as 0.4111175, this MAPE suggests that, on average, the absolute percentage difference between the predicted and actual gent_score values is relatively low, with deviations within the range of one standard deviation.
+
+In summary, considering the provided standard deviation of gent_score, the model's performance metrics indicate that it provides reasonably accurate predictions within the context of the variability of the gent_score values. The mean predictions, errors, and absolute errors fall within one standard deviation of the gent_score distribution, suggesting that the model captures the central tendency of the data and provides predictions with reasonable accuracy. However, as always, it's important to consider the specific requirements and context of the application when interpreting model performance.
+
+
+Comparing prediction and year 2022
+```{r pressure, echo=FALSE}
+PHLCensus.test <- PHLCensus.test %>% 
+  mutate(gent_score_differen = gent_score_2022 - gent_score.Predict)
+
+PHLCensus.test <- PHLCensus.test %>%
+  mutate(error.2022 = gent_score.Predict - gent_score_2022,
+         absError.2022 = abs(gent_score.Predict - gent_score_2022),
+         aPE.2022 = ifelse(gent_score.Predict != 0, abs(gent_score.Predict - gent_score_2022) / gent_score.Predict, 0))
+
+mean_abs_error <- mean(PHLCensus.test$absError.2022)
+mean_abs_error
+```
+
+
